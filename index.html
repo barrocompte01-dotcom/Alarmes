@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0e14">
+<title>Alarmes Trading</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#0b0e14;color:#e6edf3;font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:12px 12px 40px}
+h1{font-size:17px;margin:0 0 2px}
+.sub{color:#7d8590;font-size:12px;margin-bottom:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button{background:#1f6feb;color:#fff;border:0;border-radius:9px;padding:9px 13px;font-size:14px;font-weight:600}
+button.sec{background:#21262d;color:#c9d1d9}
+button:active{opacity:.7}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.card{background:#0f141c;border:1px solid #1f2733;border-radius:12px;padding:10px}
+.card .n{font-size:11px;color:#7d8590;letter-spacing:.5px}
+.card .p{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0}
+.card .m{font-size:10.5px;color:#7d8590;font-variant-numeric:tabular-nums}
+.up{color:#3fb950}.dn{color:#f85149}
+.panel{background:#0f141c;border:1px solid #1f2733;border-radius:12px;padding:12px;margin-top:12px}
+label{display:block;font-size:11px;color:#7d8590;margin:8px 0 3px;text-transform:uppercase;letter-spacing:.4px}
+select,input{width:100%;background:#161b22;color:#e6edf3;border:1px solid #2a323d;border-radius:8px;padding:9px;font-size:14px}
+.alm{display:flex;align-items:center;gap:9px;background:#0f141c;border:1px solid #1f2733;border-radius:10px;padding:10px;margin-top:7px}
+.alm.off{opacity:.4}
+.alm .t{flex:1;font-size:13px}
+.alm .t small{display:block;color:#7d8590;font-size:11px}
+.dot{width:9px;height:9px;border-radius:50%;background:#3fb950;flex:none}
+.alm.off .dot{background:#484f58}
+.x{background:none;border:0;color:#f85149;font-size:19px;padding:0 4px}
+#toast{position:fixed;left:12px;right:12px;bottom:12px;background:#1f6feb;color:#fff;padding:11px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;z-index:9}
+#toast.on{opacity:1}
+.hint{font-size:11px;color:#7d8590;margin-top:10px}
+</style>
+</head>
+<body>
+<h1>🔔 Alarmes Trading</h1>
+<div class="sub" id="status">Démarrage…</div>
+<div class="row">
+  <button id="bNotif" class="sec">Notifications</button>
+  <button id="bWake" class="sec">Écran allumé</button>
+  <button id="bTest" class="sec">Tester</button>
+</div>
+<div class="grid" id="grid"></div>
+
+<div class="panel">
+  <b style="font-size:13px">Nouvelle alarme</b>
+  <label>Actif</label><select id="fSym"></select>
+  <label>Condition</label><select id="fType">
+    <option value="above">Prix ≥ niveau</option>
+    <option value="below">Prix ≤ niveau</option>
+    <option value="px_above_ma">Prix croise AU-DESSUS de la MM</option>
+    <option value="px_below_ma">Prix croise EN DESSOUS de la MM</option>
+    <option value="ma_up">MM rapide croise AU-DESSUS de MM lente</option>
+    <option value="ma_down">MM rapide croise EN DESSOUS de MM lente</option>
+  </select>
+  <div id="wrapVal"><label>Niveau de prix</label><input id="fVal" type="number" step="any" inputmode="decimal" placeholder="ex: 2650.50"></div>
+  <div id="wrapMa" style="display:none">
+    <div class="row" style="gap:8px">
+      <div style="flex:1"><label>MM rapide</label><input id="fFast" type="number" value="20" min="2" max="200"></div>
+      <div style="flex:1"><label>MM lente</label><input id="fSlow" type="number" value="50" min="3" max="200"></div>
+    </div>
+  </div>
+  <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-size:13px;color:#c9d1d9;margin-top:12px">
+    <input type="checkbox" id="fOnce" checked style="width:auto"> Désactiver après déclenchement
+  </label>
+  <button id="bAdd" style="width:100%;margin-top:12px">Ajouter l'alarme</button>
+</div>
+
+<div class="panel">
+  <div class="row" style="justify-content:space-between;align-items:center">
+    <b style="font-size:13px">Mes alarmes (<span id="cnt">0</span>)</b>
+    <button id="bReset" class="sec" style="padding:5px 9px;font-size:12px">Réarmer tout</button>
+  </div>
+  <div id="list"></div>
+</div>
+
+<div class="hint">Les alarmes ne se déclenchent que si l'appli est ouverte. Active « Écran allumé » et laisse l'appli au premier plan.</div>
+<div id="toast"></div>
+
+<script>
+/* ====== ACTIFS (modifiables) ======
+   XAUUSD : 'XAUUSD=X'  -> si erreur, remplacer par 'GC=F' (futures or)
+   NASDAQ : '^NDX'      -> '^IXIC' pour le Composite
+*/
+const ASSETS={
+  XAUUSD:{y:'XAUUSD=X',dec:2},
+  EURUSD:{y:'EURUSD=X',dec:5},
+  NASDAQ:{y:'^NDX',dec:2},
+  BTCUSD:{y:'BTC-USD',dec:2}
+};
+const PROXIES=[
+  u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),
+  u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u)
+];
+const POLL=20000;
+let prices={},alarms=[];
+const $=s=>document.querySelector(s);
+
+/* ---------- stockage ---------- */
+function load(){try{alarms=JSON.parse(localStorage.getItem('ta_alm')||'[]')}catch(e){alarms=[]}}
+function save(){localStorage.setItem('ta_alm',JSON.stringify(alarms))}
+
+/* ---------- utils ---------- */
+const fmt=(v,d)=>v==null?'—':Number(v).toLocaleString('fr-FR',{minimumFractionDigits:d,maximumFractionDigits:d});
+function sma(a,n){if(!a||a.length<n)return null;let s=0;for(let i=a.length-n;i<a.length;i++)s+=a[i];return s/n;}
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),4000);}
+
+/* ---------- données ---------- */
+async function getChart(sym){
+  const a=ASSETS[sym];
+  const url=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(a.y)}?interval=1m&range=1d`;
+  let err;
+  for(const p of PROXIES){
+    try{
+      const r=await fetch(p(url),{cache:'no-store'});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const j=await r.json();
+      const res=j&&j.chart&&j.chart.result&&j.chart.result[0];
+      if(!res) throw new Error('réponse vide');
+      const q=res.indicators&&res.indicators.quote&&res.indicators.quote[0];
+      const closes=((q&&q.close)||[]).filter(x=>typeof x==='number');
+      let price=res.meta&&res.meta.regularMarketPrice;
+      if(typeof price!=='number') price=closes[closes.length-1];
+      if(typeof price!=='number') throw new Error('pas de prix');
+      return {price,closes};
+    }catch(e){err=e}
+  }
+  throw err||new Error('échec');
+}
+
+async function tick(){
+  const keys=Object.keys(ASSETS);
+  const out=await Promise.allSettled(keys.map(k=>getChart(k)));
+  let ok=0;
+  keys.forEach((k,i)=>{
+    const r=out[i];
+    if(r.status==='fulfilled'){
+      ok++;
+      prices[k]={price:r.value.price,prev:prices[k]?prices[k].price:null,closes:r.value.closes,t:Date.now()};
+    }
+  });
+  renderCards();evaluate();
+  const h=new Date().toLocaleTimeString('fr-FR');
+  $('#status').textContent = ok===keys.length
+    ? '✅ Données à jour · '+h
+    : '⚠️ '+ok+'/'+keys.length+' actifs reçus · '+h;
+}
+
+/* ---------- affichage ---------- */
+function renderCards(){
+  $('#grid').innerHTML=Object.keys(ASSETS).map(k=>{
+    const p=prices[k],d=ASSETS[k].dec;
+    const chg=(p&&p.prev!=null)?p.price-p.prev:null;
+    const cls=chg==null?'':(chg>=0?'up':'dn');
+    const f=p?sma(p.closes,20):null,s=p?sma(p.closes,50):null;
+    return `<div class="card"><div class="n">${k}</div>
+      <div class="p ${cls}">${p?fmt(p.price,d):'—'}</div>
+      <div class="m">MM20 ${f?fmt(f,d):'—'}<br>MM50 ${s?fmt(s,d):'—'}</div></div>`;
+  }).join('');
+}
+
+function label(a){
+  const d=ASSETS[a.sym].dec;
+  switch(a.type){
+    case 'above':return 'Prix ≥ '+fmt(a.value,d);
+    case 'below':return 'Prix ≤ '+fmt(a.value,d);
+    case 'px_above_ma':return 'Prix croise au-dessus de la MM'+a.fast;
+    case 'px_below_ma':return 'Prix croise en dessous de la MM'+a.fast;
+    case 'ma_up':return 'MM'+a.fast+' croise au-dessus de MM'+a.slow;
+    case 'ma_down':return 'MM'+a.fast+' croise en dessous de MM'+a.slow;
+  }
+  return '';
+}
+
+function renderList(){
+  $('#cnt').textContent=alarms.length;
+  $('#list').innerHTML=alarms.length?alarms.map(a=>{
+    const p=prices[a.sym];
+    return `<div class="alm ${a.on?'':'off'}">
+      <span class="dot"></span>
+      <div class="t">${a.sym} · ${label(a)}
+        <small>${p?fmt(p.price,ASSETS[a.sym].dec):'—'}${a.once?' · une fois':''}</small>
+      </div>
+      <button class="sec" style="padding:6px 9px;font-size:12px" onclick="toggleAlarm(${a.id})">${a.on?'Off':'On'}</button>
+      <button class="x" onclick="delAlarm(${a.id})">✕</button>
+    </div>`;
+  }).join(''):'<div class="hint">Aucune alarme.</div>';
+}
+
+/* ---------- moteur ---------- */
+function evalCond(a){
+  const p=prices[a.sym];
+  if(!p||typeof p.price!=='number') return false;
+  if(a.type==='above') return p.price>=a.value;
+  if(a.type==='below') return p.price<=a.value;
+  const f=sma(p.closes,a.fast),s=sma(p.closes,a.slow);
+  if(a.type==='px_above_ma') return f!=null&&p.price>=f;
+  if(a.type==='px_below_ma') return f!=null&&p.price<=f;
+  if(a.type==='ma_up')   return f!=null&&s!=null&&f>=s;
+  if(a.type==='ma_down') return f!=null&&s!=null&&f<=s;
+  return false;
+}
+
+function evaluate(){
+  let ch=false;
+  alarms.forEach(a=>{
+    if(!a.on) return;
+    const c=evalCond(a);
+    if(a.last===null||a.last===undefined){a.last=c;ch=true;return;}
+    if(c&&!a.last){ fire(a); if(a.once)a.on=false; ch=true; }
+    if(c!==a.last){ a.last=c; ch=true; }
+  });
+  if(ch) save();
+  renderList();
+}
+
+/* ---------- alerte ---------- */
+let ac=null;
+function beep(){
+  try{
+    ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+    if(ac.state==='suspended') ac.resume();
+    [0,0.35,0.7].forEach(t=>{
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type='sine';o.frequency.value=880;
+      g.gain.setValueAtTime(0.0001,ac.currentTime+t);
+      g.gain.exponentialRampToValueAtTime(0.35,ac.currentTime+t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,ac.currentTime+t+0.3);
+      o.connect(g);g.connect(ac.destination);
+      o.start(ac.currentTime+t);o.stop(ac.currentTime+t+0.32);
+    });
+  }catch(e){}
+}
+function fire(a){
+  const d=ASSETS[a.sym].dec,p=prices[a.sym];
+  const txt=a.sym+' '+fmt(p.price,d)+' · '+label(a);
+  toast('🔔 '+txt);
+  beep();
+  if(navigator.vibrate) navigator.vibrate([250,120,250,120,400]);
+  if(window.Notification&&Notification.permission==='granted'){
+    try{new Notification('🔔 '+a.sym,{body:label(a)+' — '+fmt(p.price,d),tag:'ta'+a.id});}catch(e){}
+  }
+}
+
+/* ---------- actions ---------- */
+window.toggleAlarm=id=>{const a=alarms.find(x=>x.id===id);if(a){a.on=!a.on;a.last=null;save();renderList();}};
+window.delAlarm=id=>{alarms=alarms.filter(x=>x.id!==id);save();renderList();};
+
+function addAlarm(){
+  const sym=$('#fSym').value,type=$('#fType').value;
+  const needVal=(type==='above'||type==='below');
+  const fast=Math.max(2,parseInt($('#fFast').value)||20);
+  const slow=Math.max(3,parseInt($('#fSlow').value)||50);
+  const val=parseFloat($('#fVal').value);
+  if(needVal&&!isFinite(val)){toast('Renseigne un niveau de prix');return;}
+  if(type.startsWith('ma_')&&slow<=fast){toast('La MM lente doit être > la MM rapide');return;}
+  alarms.push({id:Date.now(),sym,type,value:needVal?val:null,
+    fast:type.startsWith('px_')?fast:fast,
+    slow:slow,on:true,once:$('#fOnce').checked,last:null});
+  save();renderList();toast('Alarme ajoutée ✅');
+}
+
+/* ---------- wake lock ---------- */
+let wl=null;
+async function toggleWake(){
+  try{
+    if(wl){await wl.release();wl=null;$('#bWake').textContent='Écran allumé';toast('Écran libre');}
+    else{wl=await navigator.wakeLock.request('screen');$('#bWake').textContent='Écran ON ✓';toast('Écran maintenu allumé');
+      wl.addEventListener('release',()=>{wl=null;$('#bWake').textContent='Écran allumé';});}
+  }catch(e){toast('Non supporté sur ce navigateur');}
+}
+document.addEventListener('visibilitychange',async()=>{
+  if(document.visibilityState==='visible'&&!wl){
+    try{wl=await navigator.wakeLock.request('screen');$('#bWake').textContent='Écran ON ✓';}catch(e){}
+    tick();
+  }
+});
+
+/* ---------- init ---------- */
+load();
+$('#fSym').innerHTML=Object.keys(ASSETS).map(k=>`<option>${k}</option>`).join('');
+$('#fType').onchange=()=>{
+  const t=$('#fType').value,isVal=(t==='above'||t==='below');
+  $('#wrapVal').style.display=isVal?'':'none';
+  $('#wrapMa').style.display=isVal?'none':'';
+};
+$('#bAdd').onclick=addAlarm;
+$('#bReset').onclick=()=>{alarms.forEach(a=>{a.on=true;a.last=null;});save();renderList();toast('Alarmes réarmées');};
+$('#bTest').onclick=()=>{beep();if(navigator.vibrate)navigator.vibrate([250,120,250]);toast('🔔 Test');};
+$('#bNotif').onclick=async()=>{
+  if(!window.Notification){toast('Notifications non supportées');return;}
+  const p=await Notification.requestPermission();
+  toast(p==='granted'?'Notifications activées ✅':'Refusé — vérifie les réglages Chrome');
+};
+$('#bWake').onclick=toggleWake;
+
+renderList();renderCards();
+tick();
+setInterval(tick,POLL);
+</script>
+</body>
+</html>
